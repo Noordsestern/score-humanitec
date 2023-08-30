@@ -44,7 +44,12 @@ func TestCreateDelta(t *testing.T) {
 				Metadata: humanitec.DeltaMetadata{EnvID: "test", Name: "Test delta"},
 				Modules: humanitec.ModuleDeltas{
 					Add: map[string]map[string]interface{}{
-						"module-01": {"image": "busybox"},
+						"module-01": {
+							"image": "busybox",
+							"variables": map[string]interface{}{
+								"TEST": "<a>",
+							},
+						},
 					},
 				},
 			},
@@ -52,8 +57,8 @@ func TestCreateDelta(t *testing.T) {
 			Response: []byte(`{
 				"id": "qwe...rty",
 				"metadata": { "env_id": "test", "name": "Test delta" },
-				"modules": { 
-					"add": { "module-01": { "image": "busybox" } }
+				"modules": {
+					"add": { "module-01": { "image": "busybox", "variables": { "TEST": "<a>" } } }
 				}
 			}`),
 			ExpectedResult: &humanitec.DeploymentDelta{
@@ -61,7 +66,12 @@ func TestCreateDelta(t *testing.T) {
 				Metadata: humanitec.DeltaMetadata{EnvID: "test", Name: "Test delta"},
 				Modules: humanitec.ModuleDeltas{
 					Add: map[string]map[string]interface{}{
-						"module-01": {"image": "busybox"},
+						"module-01": {
+							"image": "busybox",
+							"variables": map[string]interface{}{
+								"TEST": "<a>",
+							},
+						},
 					},
 				},
 			},
@@ -101,6 +111,7 @@ func TestCreateDelta(t *testing.T) {
 							assert.Equal(t, []string{"Bearer " + apiToken}, r.Header["Authorization"])
 							assert.Equal(t, []string{"application/json"}, r.Header["Accept"])
 							assert.Equal(t, []string{"application/json"}, r.Header["Content-Type"])
+							assert.Equal(t, []string{"app score-humanitec/0.0.0; sdk score-humanitec/0.0.0"}, r.Header["Humanitec-User-Agent"])
 
 							if tt.Data != nil {
 								var body humanitec.CreateDeploymentDeltaRequest
@@ -158,6 +169,7 @@ func TestUpdateDelta_success(t *testing.T) {
 					assert.Equal(t, []string{"Bearer " + apiToken}, r.Header["Authorization"])
 					assert.Equal(t, []string{"application/json"}, r.Header["Accept"])
 					assert.Equal(t, []string{"application/json"}, r.Header["Content-Type"])
+					assert.Equal(t, []string{"app score-humanitec/0.0.0; sdk score-humanitec/0.0.0"}, r.Header["Humanitec-User-Agent"])
 					var body []*humanitec.UpdateDeploymentDeltaRequest
 					var dec = json.NewDecoder(r.Body)
 					assert.NoError(t, dec.Decode(&body))
