@@ -104,11 +104,12 @@ func TestScoreConvert(t *testing.T) {
 	)
 
 	var tests = []struct {
-		Name       string
-		Source     *score.WorkloadSpec
-		Extensions *extensions.HumanitecExtensionsSpec
-		Output     *humanitec.CreateDeploymentDeltaRequest
-		Error      error
+		Name              string
+		Source            *score.WorkloadSpec
+		Extensions        *extensions.HumanitecExtensionsSpec
+		Output            *humanitec.CreateDeploymentDeltaRequest
+		WorkloadSourceURL string
+		Error             error
 	}{
 		{
 			Name: "Should convert SCORE to deployment delta",
@@ -168,7 +169,8 @@ func TestScoreConvert(t *testing.T) {
 					},
 				},
 			},
-			Extensions: &extensions.HumanitecExtensionsSpec{},
+			Extensions:        &extensions.HumanitecExtensionsSpec{},
+			WorkloadSourceURL: "",
 			Output: &humanitec.CreateDeploymentDeltaRequest{
 				Metadata: humanitec.DeltaMetadata{EnvID: envID, Name: name},
 				Modules: humanitec.ModuleDeltas{
@@ -176,6 +178,9 @@ func TestScoreConvert(t *testing.T) {
 						"backend": {
 							"profile": "humanitec/default-module",
 							"spec": map[string]interface{}{
+								"annotations": map[string]interface{}{
+									"humanitec.io/managed-by": "score-humanitec",
+								},
 								"containers": map[string]interface{}{
 									"backend": map[string]interface{}{
 										"id":    "backend",
@@ -255,10 +260,22 @@ func TestScoreConvert(t *testing.T) {
 							{
 								Target: "/etc/backend/config.yaml",
 								Mode:   "666",
-								Content: []string{
+								Content: []interface{}{
 									"---",
 									"DEBUG: ${resources.env.DEBUG}",
 								},
+							},
+							{
+								Target:   "/etc/backend/config.yml",
+								Mode:     "666",
+								Content:  "DEBUG: ${resources.env.DEBUG}",
+								NoExpand: true,
+							},
+							{
+								Target:   "/etc/backend/config.txt",
+								Mode:     "666",
+								Source:   "testdata/config.txt",
+								NoExpand: true,
 							},
 						},
 						Volumes: []score.VolumeMountSpec{
@@ -295,7 +312,8 @@ func TestScoreConvert(t *testing.T) {
 								AnnotationLabelResourceId: "externals.annotations-db-id",
 							},
 						},
-						Type: "postgres",
+						Type:  "postgres",
+						Class: "large",
 						Params: map[string]interface{}{
 							"extensions": map[string]interface{}{
 								"uuid-ossp": map[string]interface{}{
@@ -315,6 +333,12 @@ func TestScoreConvert(t *testing.T) {
 							},
 						},
 						Type: "some-type",
+					},
+					"route": {
+						Type: "route",
+						Params: map[string]interface{}{
+							"host": "${resources.dns.host}",
+						},
 					},
 				},
 			},
@@ -346,6 +370,7 @@ func TestScoreConvert(t *testing.T) {
 					},
 				},
 			},
+			WorkloadSourceURL: "https://test.com",
 			Output: &humanitec.CreateDeploymentDeltaRequest{
 				Metadata: humanitec.DeltaMetadata{EnvID: envID, Name: name},
 				Modules: humanitec.ModuleDeltas{
@@ -353,6 +378,10 @@ func TestScoreConvert(t *testing.T) {
 						"test": {
 							"profile": "test-org/test-module",
 							"spec": map[string]interface{}{
+								"annotations": map[string]interface{}{
+									"humanitec.io/managed-by":      "score-humanitec",
+									"humanitec.io/workload-source": "https://test.com",
+								},
 								"containers": map[string]interface{}{
 									"backend": map[string]interface{}{
 										"id": "backend",
@@ -368,6 +397,14 @@ func TestScoreConvert(t *testing.T) {
 											"/etc/backend/config.yaml": map[string]interface{}{
 												"mode":  "666",
 												"value": "---\nDEBUG: ${values.DEBUG}",
+											},
+											"/etc/backend/config.yml": map[string]interface{}{
+												"mode":  "666",
+												"value": "DEBUG: $\\{resources.env.DEBUG}",
+											},
+											"/etc/backend/config.txt": map[string]interface{}{
+												"mode":  "666",
+												"value": "Mounted\nFile\nContent\n$\\{resources.env.DEBUG}",
 											},
 										},
 										"volume_mounts": map[string]interface{}{
@@ -397,10 +434,12 @@ func TestScoreConvert(t *testing.T) {
 							},
 							"externals": map[string]interface{}{
 								"data": map[string]interface{}{
-									"type": "volume",
+									"type":  "volume",
+									"class": "default",
 								},
 								"annotations-db-id": map[string]interface{}{
-									"type": "postgres",
+									"type":  "postgres",
+									"class": "large",
 									"params": map[string]interface{}{
 										"extensions": map[string]interface{}{
 											"uuid-ossp": map[string]interface{}{
@@ -408,6 +447,13 @@ func TestScoreConvert(t *testing.T) {
 												"version": "1.1",
 											},
 										},
+									},
+								},
+								"route": map[string]interface{}{
+									"type":  "route",
+									"class": "default",
+									"params": map[string]interface{}{
+										"host": "${shared.dns.host}",
 									},
 								},
 							},
@@ -419,7 +465,8 @@ func TestScoreConvert(t *testing.T) {
 						Operation: "add",
 						Path:      "/dns",
 						Value: map[string]interface{}{
-							"type": "dns",
+							"type":  "dns",
+							"class": "default",
 							"params": map[string]interface{}{
 								"test": "value",
 							},
@@ -432,7 +479,7 @@ func TestScoreConvert(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
-			res, err := ConvertSpec(name, envID, tt.Source, tt.Extensions)
+			res, err := ConvertSpec(name, envID, "", tt.WorkloadSourceURL, tt.Source, tt.Extensions)
 
 			if tt.Error != nil {
 				// On Error

@@ -10,6 +10,8 @@ package humanitec
 import (
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 
 	mergo "github.com/imdario/mergo"
@@ -84,8 +86,72 @@ func getProbeDetails(probe *score.ContainerProbeSpec) map[string]interface{} {
 	return res
 }
 
+// readFile reads a text file into memory
+func readFile(baseDir, path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(baseDir, path)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading '%s': %w", path, err)
+	}
+
+	return string(raw), nil
+}
+
+// mergeFileContent joins inline file contents with '\n' character (DEPRECATED)
+func mergeFileContent(content interface{}, target string) (string, error) {
+	switch val := content.(type) {
+	case string:
+		return val, nil
+	case []interface{}:
+		// TODO: Deprecated functionality
+		log.Printf("Warning: The content for the '%s' file is provided in a deprecated format. Strings will be joined with '\\n' character.", target)
+		var sb strings.Builder
+		for _, str := range val {
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(fmt.Sprint(str))
+		}
+		return sb.String(), nil
+		// END (TODO)
+	default:
+		return "", fmt.Errorf("can not use '%T' as a content for '%s': not supported", content, target)
+	}
+}
+
+// convertFileMountSpec extracts a mount file details from the source spec.
+func convertFileMountSpec(f *score.FileMountSpec, context *templatesContext, baseDir string) (string, map[string]interface{}, error) {
+	var err error
+	var content string
+
+	if f.Source != "" {
+		content, err = readFile(baseDir, f.Source)
+	} else {
+		content, err = mergeFileContent(f.Content, f.Target)
+	}
+	if err != nil {
+		return "", nil, err
+	}
+
+	if f.NoExpand {
+		content = context.Escape(content)
+	} else {
+		content = context.Substitute(content)
+	}
+
+	return f.Target,
+		map[string]interface{}{
+			"mode":  f.Mode,
+			"value": content,
+		},
+		nil
+}
+
 // convertContainerSpec extracts a container details from the source spec.
-func convertContainerSpec(name string, spec *score.ContainerSpec, context *templatesContext) (map[string]interface{}, error) {
+func convertContainerSpec(name string, spec *score.ContainerSpec, context *templatesContext, baseDir string) (map[string]interface{}, error) {
 	var containerSpec = map[string]interface{}{
 		"id": name,
 	}
@@ -120,9 +186,10 @@ func convertContainerSpec(name string, spec *score.ContainerSpec, context *templ
 	if len(spec.Files) > 0 {
 		var files = map[string]interface{}{}
 		for _, f := range spec.Files {
-			files[f.Target] = map[string]interface{}{
-				"mode":  f.Mode,
-				"value": context.Substitute(strings.Join(f.Content, "\n")),
+			if target, mount, err := convertFileMountSpec(&f, context, baseDir); err == nil {
+				files[target] = mount
+			} else {
+				return nil, err
 			}
 		}
 		containerSpec["files"] = files
@@ -143,15 +210,21 @@ func convertContainerSpec(name string, spec *score.ContainerSpec, context *templ
 }
 
 // ConvertSpec converts SCORE specification into Humanitec deployment delta.
-func ConvertSpec(name, envID string, spec *score.WorkloadSpec, ext *extensions.HumanitecExtensionsSpec) (*humanitec.CreateDeploymentDeltaRequest, error) {
+func ConvertSpec(name, envID, baseDir, workloadSourceURL string, spec *score.WorkloadSpec, ext *extensions.HumanitecExtensionsSpec) (*humanitec.CreateDeploymentDeltaRequest, error) {
 	ctx, err := buildContext(spec.Metadata, spec.Resources, ext.Resources)
 	if err != nil {
 		return nil, fmt.Errorf("preparing context: %w", err)
 	}
+	annotations := map[string]interface{}{
+		managedByAnnotation: managedBy,
+	}
+	if workloadSourceURL != "" {
+		annotations[workloadSourceAnnotation] = workloadSourceURL
+	}
 
 	var containers = make(map[string]interface{}, len(spec.Containers))
 	for cName, cSpec := range spec.Containers {
-		if container, err := convertContainerSpec(cName, &cSpec, ctx); err == nil {
+		if container, err := convertContainerSpec(cName, &cSpec, ctx, baseDir); err == nil {
 			containers[cName] = container
 		} else {
 			return nil, fmt.Errorf("processing container specification for '%s': %w", cName, err)
@@ -159,7 +232,8 @@ func ConvertSpec(name, envID string, spec *score.WorkloadSpec, ext *extensions.H
 	}
 
 	var workloadSpec = map[string]interface{}{
-		"containers": containers,
+		"annotations": annotations,
+		"containers":  containers,
 	}
 	if len(spec.Service.Ports) > 0 {
 		var ports = map[string]interface{}{}
@@ -224,25 +298,30 @@ func ConvertSpec(name, envID string, spec *score.WorkloadSpec, ext *extensions.H
 				}
 			}
 			// END (DEPRECATED)
-
+			var class = "default"
+			if res.Class != "" {
+				class = res.Class
+			}
 			if mod, scope, resName, err := parseResourceId(resId); err != nil {
 				log.Printf("Warning: %v.\n", err)
 			} else if mod == "" || mod == spec.Metadata.Name {
 				if scope == "externals" {
 					var extRes = map[string]interface{}{
-						"type": res.Type,
+						"type":  res.Type,
+						"class": class,
 					}
 					if len(res.Params) > 0 {
-						extRes["params"] = res.Params
+						extRes["params"] = ctx.SubstituteAll(res.Params)
 					}
 					externals[resName] = extRes
 				} else if scope == "shared" {
 					var resName = strings.Replace(resId, "shared.", "", 1)
 					var sharedRes = map[string]interface{}{
-						"type": res.Type,
+						"type":  res.Type,
+						"class": class,
 					}
 					if len(res.Params) > 0 {
-						sharedRes["params"] = res.Params
+						sharedRes["params"] = ctx.SubstituteAll(res.Params)
 					}
 					shared = append(shared, humanitec.UpdateAction{
 						Operation: "add",

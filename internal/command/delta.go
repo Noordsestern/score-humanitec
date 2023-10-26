@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/score-spec/score-humanitec/internal/humanitec"
 	api "github.com/score-spec/score-humanitec/internal/humanitec_go/client"
@@ -25,6 +26,7 @@ func init() {
 	deltaCmd.Flags().StringVarP(&scoreFile, "file", "f", scoreFileDefault, "Source SCORE file")
 	deltaCmd.Flags().StringVar(&overridesFile, "overrides", overridesFileDefault, "Overrides file")
 	deltaCmd.Flags().StringVar(&extensionsFile, "extensions", extensionsFileDefault, "Extensions file")
+	deltaCmd.Flags().StringVar(&workloadSourceURL, "workload-source-url", "", "URL of file that is managing the humanitec workload")
 	deltaCmd.Flags().StringVar(&uiUrl, "ui-url", uiUrlDefault, "Humanitec UI")
 	deltaCmd.Flags().StringVar(&apiUrl, "api-url", apiUrlDefault, "Humanitec API endpoint")
 	deltaCmd.Flags().StringVar(&deltaID, "delta", "", "The ID of an existing delta in Humanitec into which to merge the generated delta")
@@ -39,7 +41,7 @@ func init() {
 	deltaCmd.MarkFlagRequired("env")
 
 	deltaCmd.Flags().StringArrayVarP(&overrideParams, "property", "p", nil, "Overrides selected property value")
-	deltaCmd.Flags().StringVar(&message, "message", "m", messageDefault, "Message")
+	deltaCmd.Flags().StringVarP(&message, "message", "m", messageDefault, "Message")
 
 	deltaCmd.Flags().BoolVar(&deploy, "deploy", false, "Trigger a new delta deployment at the end")
 	deltaCmd.Flags().BoolVar(&retry, "retry", false, "Retry deployments when a deployment is currently in progress")
@@ -66,6 +68,7 @@ func delta(cmd *cobra.Command, args []string) error {
 
 	// Load SCORE spec and extensions
 	//
+	baseDir := filepath.Dir(scoreFile)
 	spec, ext, err := loadSpec(scoreFile, overridesFile, extensionsFile, skipValidation)
 	if err != nil {
 		return err
@@ -74,7 +77,7 @@ func delta(cmd *cobra.Command, args []string) error {
 	// Prepare a new deployment
 	//
 	log.Print("Preparing a new deployment...\n")
-	delta, err := humanitec.ConvertSpec(message, envID, spec, ext)
+	delta, err := humanitec.ConvertSpec(message, envID, baseDir, workloadSourceURL, spec, ext)
 	if err != nil {
 		return fmt.Errorf("preparing new deployment: %w", err)
 	}
@@ -112,7 +115,7 @@ func delta(cmd *cobra.Command, args []string) error {
 		log.Printf("Starting a new deployment for delta '%s'...\n", res.ID)
 		_, err := client.StartDeployment(cmd.Context(), orgID, appID, envID, retry, &ht.StartDeploymentRequest{
 			DeltaID: res.ID,
-			Comment: "Auto-deployment (SCORE)",
+			Comment: message,
 		})
 		if err != nil {
 			return err

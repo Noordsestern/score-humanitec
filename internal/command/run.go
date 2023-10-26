@@ -9,11 +9,11 @@ package command
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/imdario/mergo"
@@ -22,7 +22,6 @@ import (
 	"github.com/score-spec/score-humanitec/internal/humanitec/extensions"
 	"github.com/spf13/cobra"
 	"github.com/tidwall/sjson"
-	"github.com/xeipuuv/gojsonschema"
 
 	yaml "gopkg.in/yaml.v3"
 
@@ -35,11 +34,12 @@ func init() {
 	runCmd.Flags().StringVarP(&scoreFile, "file", "f", scoreFileDefault, "Source SCORE file")
 	runCmd.Flags().StringVar(&overridesFile, "overrides", overridesFileDefault, "Overrides file")
 	runCmd.Flags().StringVar(&extensionsFile, "extensions", extensionsFileDefault, "Extensions file")
+	runCmd.Flags().StringVar(&workloadSourceURL, "workload-source-url", "", "URL of file that is managing the humanitec workload")
 	runCmd.Flags().StringVar(&envID, "env", "", "Environment ID")
 	runCmd.MarkFlagRequired("env")
 
 	runCmd.Flags().StringArrayVarP(&overrideParams, "property", "p", nil, "Overrides selected property value")
-	runCmd.Flags().StringVar(&message, "message", "m", messageDefault, "Message")
+	runCmd.Flags().StringVarP(&message, "message", "m", messageDefault, "Message")
 
 	runCmd.Flags().BoolVar(&skipValidation, "skip-validation", false, "DEPRECATED: Disables Score file schema validation.")
 	runCmd.Flags().BoolVar(&verbose, "verbose", false, "Enable diagnostic messages (written to STDERR)")
@@ -60,6 +60,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// Load SCORE spec and extensions
 	//
+	baseDir := filepath.Dir(scoreFile)
 	spec, ext, err := loadSpec(scoreFile, overridesFile, extensionsFile, skipValidation)
 	if err != nil {
 		return err
@@ -68,7 +69,7 @@ func run(cmd *cobra.Command, args []string) error {
 	// Prepare a new deployment
 	//
 	log.Print("Preparing a new deployment...\n")
-	delta, err := humanitec.ConvertSpec(message, envID, spec, ext)
+	delta, err := humanitec.ConvertSpec(message, envID, baseDir, workloadSourceURL, spec, ext)
 	if err != nil {
 		return fmt.Errorf("preparing new deployment: %w", err)
 	}
@@ -178,15 +179,7 @@ func loadSpec(scoreFile, overridesFile, extensionsFile string, skipValidation bo
 	//
 	if !skipValidation {
 		log.Print("Validating SCORE spec...\n")
-		if res, err := schema.Validate(gojsonschema.NewGoLoader(srcMap)); err != nil {
-			return nil, nil, fmt.Errorf("validating workload spec: %w", err)
-		} else if !res.Valid() {
-			for _, valErr := range res.Errors() {
-				log.Println(valErr.String())
-				if err == nil {
-					err = errors.New(valErr.String())
-				}
-			}
+		if err := schema.Validate(srcMap); err != nil {
 			return nil, nil, fmt.Errorf("validating workload spec: %w", err)
 		}
 	}
@@ -195,14 +188,14 @@ func loadSpec(scoreFile, overridesFile, extensionsFile string, skipValidation bo
 	//
 
 	var spec score.WorkloadSpec
-	log.Print("Validating SCORE spec...\n")
+	log.Print("Applying SCORE spec...\n")
 	if err = mapstructure.Decode(srcMap, &spec); err != nil {
-		return nil, nil, fmt.Errorf("validating workload spec: %w", err)
+		return nil, nil, fmt.Errorf("applying workload spec: %w", err)
 	}
 
 	var ext extensions.HumanitecExtensionsSpec
 	if err = mapstructure.Decode(extMap, &ext); err != nil {
-		return nil, nil, fmt.Errorf("validating extensions spec: %w", err)
+		return nil, nil, fmt.Errorf("applying extensions spec: %w", err)
 	}
 
 	return &spec, &ext, nil
